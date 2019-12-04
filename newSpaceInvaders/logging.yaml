@@ -1,0 +1,22 @@
+version: 1
+disable_existing_loggers: False
+formatters:
+    simple:
+        format: "%(asctime)s %(name)-20s%(levelname)-8s%(message)s"
+handlers:
+    console:
+        class: logging.StreamHandler
+        level: DEBUG
+        formatter: simple
+        stream: ext://sys.stdout
+    mplog:
+        class: logging.RotatingFileHandler
+        level: DEBUG
+        formatter: simple
+        name: log.txt
+        mode: a
+        maxsize: 1024
+        rotate: 0
+root:
+    level: DEBUG
+    handlers: [console, mplog]
