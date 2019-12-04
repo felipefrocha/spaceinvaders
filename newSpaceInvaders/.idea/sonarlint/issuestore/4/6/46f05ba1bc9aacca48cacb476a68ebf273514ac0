@@ -1,3 +1,5 @@
 
-Fpython:S1481T"(Remove the unused local variable "side".(Φª
+Fpython:S1481z"(Remove the unused local variable "side".(Φª
 8ν“μ-
+=python:S125"Remove this commented out code.(ΖΤ¦8φ»ΐσμ-
+tpython:S3776Ξ"TRefactor this function to reduce its Cognitive Complexity from 49 to the 15 allowed.(υ²π8φ»ΐσμ-

@@ -298,6 +298,38 @@ if __name__ == '__main__':
     def move_right():
         player.move_right()
 
+    BLOCO_SIZE =3
+    square = Turtle('square', visible=True)
+    square.setposition(-200,-100)
+    square.speed(0)
+    square.color('greEn')
+    square.setheading(270)
+    square.penup()
+    square.shapesize(BLOCO_SIZE , BLOCO_SIZE)
+    square1 = Turtle('square', visible=True)
+    square1.setposition(-100, -100)
+    square1.speed(0)
+    square1.color('green')
+    square1.setheading(270)
+    square1.penup()
+    square1.shapesize(BLOCO_SIZE, BLOCO_SIZE)
+    square2 = Turtle('square', visible=True)
+    square2.setposition(100, -100)
+    square2.speed(0)
+    square2.color('green')
+    square2.setheading(270)
+    square2.penup()
+    square2.shapesize(BLOCO_SIZE, BLOCO_SIZE)
+    square3 = Turtle('square', visible=True)
+    square3.setposition(200, -100)
+    square3.speed(0)
+    square3.color('green')
+    square3.setheading(270)
+    square3.penup()
+    square3.shapesize(BLOCO_SIZE, BLOCO_SIZE)
+
+
+
 
     def fire_bullet():
         global player_bullet_state
@@ -329,41 +361,38 @@ if __name__ == '__main__':
     player_bullet.setheading(270)
     player_bullet.penup()
     player_bullet.shapesize(0.2, 0.3)
+    turno = 9
+    linhas = 1 if turno < 10 else 2
+    for dy in range(2):
+        for dx in range(10):
+            enemy = Turtle("turtle", visible=False)
+            enemy.speed(0)
+            enemy.color('red')
+            enemy.setheading(270)
+            enemy.penup()
+            enemy.setposition(x + dx * 40, y - dy * 40)
+            enemy.showturtle()
+
+            bullet = Turtle("turtle", visible=False)
+            bullet.shape('square')
+            bullet.shapesize(0.3, 0.5)
+            bullet.speed(0)
+            bullet.color('yellow')
+            bullet.setheading(270)
+            bullet.penup()
+            bullet.setposition(enemy.xcor(), enemy.ycor())
+            bullet.hideturtle()
+
+            enemies.append(Thread(
+                target=move_enemy_horizontally,
+                args=(enemy, direction, bullet),
+                daemon=True).start())
+        direction = ["left", "right"][direction == "left"]
+
+
     screen = Screen()
-    turno = 0
-    while turno < 20:
-        if len(enemies) == 0:
-            turno += 1
-            linhas = 1 if turno < 10 else 2
-            for dy in range(linhas):
-                for dx in range((turno % 10) + 1):
-                    enemy = Turtle("turtle", visible=False)
-                    enemy.speed(0)
-                    enemy.color('red')
-                    enemy.setheading(270)
-                    enemy.penup()
-                    enemy.setposition(x + dx * 40, y - dy * 40)
-                    enemy.showturtle()
 
-                    bullet = Turtle("turtle", visible=False)
-                    bullet.shape('square')
-                    bullet.shapesize(0.3, 0.5)
-                    bullet.speed(0)
-                    bullet.color('yellow')
-                    bullet.setheading(270)
-                    bullet.penup()
-                    bullet.setposition(enemy.xcor(), enemy.ycor())
-                    bullet.hideturtle()
-
-                    enemies.append(Thread(
-                        target=move_enemy_horizontally,
-                        args=(enemy, direction, bullet),
-                        daemon=True).start())
-                direction = ["left", "right"][direction == "left"]
-
-
-
-        process_queue()
+    process_queue()
     screen.mainloop()
 
     player.join(1)
