@@ -103,11 +103,11 @@ def destroy_enemy(enemy):
     number_of_enemies += 1 if number_of_enemies < 20 else 20
 
 
-def detroy_player(player):
+def detroy_player():
     global game_over
     player.stop()
     player.join(1)
-    game_over = False
+    game_over = True
 
 
 def screen_definitions():
@@ -177,14 +177,13 @@ def fire_enemy_bullet(bullet, posy):
     y = posy
     x = bullet.xcor()
     while True:
-        if y > MIN_POSY and not is_colision(x,y):
+        if y > MIN_POSY and not is_colision(x, y):
             y -= BULLET_SEED
             actions.put((bullet.sety, y))
         else:
             actions.put(bullet.hideturtle)
-            if is_colision(x,y):
+            if is_colision(x, y):
                 player.stop()
-                player.join(1)
                 game_over = True
             return
 
@@ -210,7 +209,7 @@ def move_enemy_horizontally(enemy, direction, bullet):
     x, y = enemy.position()
     while True:
         while direction == "right":
-            if (randint(0, 1000)%BULLET_RATIO) == 0 and y > (MIN_POSY + 30):
+            if (randint(0, 1000) % BULLET_RATIO) == 0 and y > (MIN_POSY + 30):
                 actions.put((bullet.setposition, (x, y)))
                 bullets = Thread(target=fire_enemy_bullet,
                                  args=(bullet, y),
@@ -227,13 +226,13 @@ def move_enemy_horizontally(enemy, direction, bullet):
                 if is_colision_player_bullet(x, y):
                     score.add_point(10)
                 if is_colision(x, y):
+                    player.draw.hideturtle()
                     player.stop()
-                    player.join(1)
                     game_over = True
                 direction = 'exit'
 
         while direction == "left":
-            if (randint(0, 1000)%BULLET_RATIO) == 0 and y > (MIN_POSY + 30):
+            if (randint(0, 1000) % BULLET_RATIO) == 0 and y > (MIN_POSY + 30):
                 actions.put((bullet.setposition, (x, y)))
                 bullets = Thread(target=fire_enemy_bullet,
                                  args=(bullet, enemy.ycor()),
@@ -248,10 +247,10 @@ def move_enemy_horizontally(enemy, direction, bullet):
             if y < MIN_POSY or is_colision(x, y) or is_colision_player_bullet(x, y):
                 actions.put(enemy.hideturtle)
                 if is_colision_player_bullet(x, y):
-                     score.add_point(10)
+                    score.add_point(10)
                 if is_colision(x, y):
                     player.stop()
-                    player.join(1)
+                    player.draw.hideturtle()
                     game_over = True
                 direction = 'exit'
         if direction == 'exit':
@@ -259,7 +258,6 @@ def move_enemy_horizontally(enemy, direction, bullet):
     if bullets and bullets.isAlive():
         bullets.join(1)
         return
-
 
 
 def is_colision(x, y):
@@ -293,7 +291,6 @@ if __name__ == '__main__':
     player_bullet_state = False
 
 
-
     def move_left():
         player.move_left()
 
@@ -305,8 +302,8 @@ if __name__ == '__main__':
     def fire_bullet():
         global player_bullet_state
         if not player_bullet_state:
-            x,y = player.draw.position()
-            player_bullet.setposition(x,y)
+            x, y = player.draw.position()
+            player_bullet.setposition(x, y)
             player_bullet_state = True
             Thread(target=fire_player_bullet,
                    args=(player_bullet, y),
@@ -332,39 +329,49 @@ if __name__ == '__main__':
     player_bullet.setheading(270)
     player_bullet.penup()
     player_bullet.shapesize(0.2, 0.3)
-
-    turno = 1
-    linhas = 1 if turno < 10 else 2
-    for dy in range(linhas):
-        for dx in range((turno % 10) + 1):
-            enemy = Turtle("turtle", visible=False)
-            enemy.speed(0)
-            enemy.color('red')
-            enemy.setheading(270)
-            enemy.penup()
-            enemy.setposition(x + dx * 40, y - dy * 40)
-            enemy.showturtle()
-
-            bullet = Turtle("turtle", visible=False)
-            bullet.shape('square')
-            bullet.shapesize(0.3, 0.5)
-            bullet.speed(0)
-            bullet.color('yellow')
-            bullet.setheading(270)
-            bullet.penup()
-            bullet.setposition(enemy.xcor(), enemy.ycor())
-            bullet.hideturtle()
-
-            enemies.append(Thread(
-                target=move_enemy_horizontally,
-                args=(enemy, direction, bullet),
-                daemon=True).start())
-
-        direction = ["left", "right"][direction == "left"]
-
     screen = Screen()
-    process_queue()
+    turno = 0
+    while turno < 20:
+        if len(enemies) == 0:
+            turno += 1
+            linhas = 1 if turno < 10 else 2
+            for dy in range(linhas):
+                for dx in range((turno % 10) + 1):
+                    enemy = Turtle("turtle", visible=False)
+                    enemy.speed(0)
+                    enemy.color('red')
+                    enemy.setheading(270)
+                    enemy.penup()
+                    enemy.setposition(x + dx * 40, y - dy * 40)
+                    enemy.showturtle()
+
+                    bullet = Turtle("turtle", visible=False)
+                    bullet.shape('square')
+                    bullet.shapesize(0.3, 0.5)
+                    bullet.speed(0)
+                    bullet.color('yellow')
+                    bullet.setheading(270)
+                    bullet.penup()
+                    bullet.setposition(enemy.xcor(), enemy.ycor())
+                    bullet.hideturtle()
+
+                    enemies.append(Thread(
+                        target=move_enemy_horizontally,
+                        args=(enemy, direction, bullet),
+                        daemon=True).start())
+                direction = ["left", "right"][direction == "left"]
+
+
+
+        process_queue()
     screen.mainloop()
+
+    player.join(1)
+
+    for enemy in enemies:
+        enemy.join(1)
+
+    score.join(1)
 
     log.info('O jogo foi encerrado!')
     time.sleep(1)

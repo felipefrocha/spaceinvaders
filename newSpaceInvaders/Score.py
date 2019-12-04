@@ -37,7 +37,7 @@ class Score:
     def score_display(self):
         self.score_pen.write(self.scorestring, False, align="left", font=("Arial", 14, "normal"))
 
-    def add_point(self,point):
+    def add_point(self, point):
         self.points += point
         self.update_score()
 

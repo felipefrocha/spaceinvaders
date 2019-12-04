@@ -26,7 +26,6 @@ class Player(threading.Thread):
         self.share_position()
 
     def stop(self):
-        self.draw.hideturtle()
         self.__stop.set()
 
     def stopped(self):
