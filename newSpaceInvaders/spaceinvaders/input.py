@@ -44,6 +44,22 @@ KEYMAP_P2 = {
 DEFAULT_KEYMAPS = (KEYMAP_P1, KEYMAP_P2)
 
 
+def encode_inputs(inputs: dict) -> dict:
+    """Encode a ``{pid: set(Intent)}`` tick's inputs into ``{pid: [name, ...]}``.
+
+    This is the wire/log shape used by both ``server.Room.input_log`` and
+    ``replay.RoundRecord.input_log`` — sharing one implementation is what
+    keeps the two interchangeable (see ``replay.py``'s module docstring).
+    A pid with an empty held-set is omitted entirely rather than written as
+    ``[]``, so a pid absent from the result means "no input that tick", not
+    an error.
+    """
+    return {
+        pid: sorted(intent.name for intent in held)
+        for pid, held in inputs.items() if held
+    }
+
+
 class InputState:
     """Tracks which intents are currently held for a single player.
 

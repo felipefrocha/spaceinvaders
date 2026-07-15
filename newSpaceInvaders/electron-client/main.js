@@ -113,7 +113,7 @@ function startLocalServer(maxPlayers) {
         ok: false,
         error: `local server exited before reporting a port (code=${code}, signal=${signal})\n${stderrBuf.slice(-800)}`,
       });
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!proc.expectedExit && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('local-server:exit', { code, signal });
       }
     });
@@ -126,6 +126,9 @@ function startLocalServer(maxPlayers) {
 
 function stopLocalServer() {
   if (localServerProcess) {
+    // Tagged on the process itself (not a shared module flag) so this can't
+    // race or cross-talk if a new server is started again in rapid succession.
+    localServerProcess.expectedExit = true;
     try {
       localServerProcess.kill();
     } catch (err) {

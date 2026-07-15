@@ -332,6 +332,92 @@ def test_room_is_idle_false_if_any_pid_still_connected():
     assert room.is_idle() is False
 
 
+def test_free_pid_reclaims_slot_directly_after_grace_elapses():
+    room = Room("x", max_players=1)
+    room.connections[0] = None
+    room.tokens[0] = "old-token"
+    room.disconnect_time[0] = time.monotonic() - (server.RECONNECT_GRACE_SECONDS + 1)
+    assert room._free_pid() == 0
+
+
+def test_free_pid_does_not_reclaim_slot_within_grace_window():
+    room = Room("x", max_players=1)
+    room.connections[0] = None
+    room.tokens[0] = "old-token"
+    room.disconnect_time[0] = time.monotonic()
+    assert room._free_pid() is None
+
+
+def test_join_with_stale_token_past_grace_is_treated_as_a_new_join():
+    room = Room("x", max_players=1)
+
+    async def scenario():
+        first_pid, first_token = await room.join(object(), None)
+        room.leave(first_pid)
+        room.disconnect_time[first_pid] = time.monotonic() - (server.RECONNECT_GRACE_SECONDS + 1)
+        return first_pid, first_token, await room.join(object(), first_token)
+    first_pid, first_token, (new_pid, new_token) = run(scenario())
+    # The slot is still reclaimed (it's the only one), but as a fresh join —
+    # the stale token no longer has special reconnect authority over it.
+    assert new_pid == first_pid
+    assert new_token != first_token
+
+
+def test_join_with_correct_token_within_grace_reclaims_same_pid():
+    room = Room("x", max_players=1)
+
+    async def scenario():
+        first_pid, first_token = await room.join(object(), None)
+        room.leave(first_pid)
+        return first_pid, first_token, await room.join(object(), first_token)
+    first_pid, first_token, (reclaimed_pid, reclaimed_token) = run(scenario())
+    assert reclaimed_pid == first_pid
+    assert reclaimed_token == first_token
+
+
+def test_new_player_can_claim_a_slot_abandoned_past_grace_with_no_token():
+    room = Room("x", max_players=1)
+
+    async def scenario():
+        first_pid, _ = await room.join(object(), None)
+        room.leave(first_pid)
+        room.disconnect_time[first_pid] = time.monotonic() - (server.RECONNECT_GRACE_SECONDS + 1)
+        return first_pid, await room.join(object(), None)
+    first_pid, (new_pid, new_token) = run(scenario())
+    assert new_pid == first_pid
+    assert new_token is not None
+
+
+def test_never_joined_slots_start_not_alive():
+    room = Room("x", max_players=3)
+    assert all(p.alive is False for p in room.world.players)
+
+
+def test_player_becomes_alive_on_first_join_only():
+    room = Room("x", max_players=2)
+
+    async def scenario():
+        await room.join(object(), None)
+    run(scenario())
+    assert room.world.players[0].alive is True
+    assert room.world.players[1].alive is False
+
+
+def test_lost_condition_does_not_wait_on_never_joined_ghost_slots():
+    room = Room("x", max_players=3, cfg=Config(enemy_fire_chance=0.0, lives=1))
+
+    async def scenario():
+        return await room.join(object(), None)
+    pid, _ = run(scenario())
+
+    # Only pid joined; the other two never did, so they start not-alive and
+    # must not block the LOST condition once the one real player dies.
+    room.world.players[pid].hit()
+    room.world.step(server.DT, {})
+
+    assert room.world.state.name == "LOST"
+
+
 def test_room_run_exits_immediately_when_already_idle():
     room = Room("x", max_players=1)
     room.connections[0] = None
@@ -355,6 +441,56 @@ def test_room_broadcast_drops_pid_whose_send_raises_connection_closed():
         assert room.disconnect_time[0] is not None
 
     run(scenario())
+
+
+def test_room_broadcast_reraises_unexpected_exception_not_swallowed_as_drop():
+    async def scenario():
+        room = Room("x", max_players=1)
+
+        class _BrokenSocket:
+            async def send(self, text):
+                raise RuntimeError("boom")
+
+        room.connections[0] = _BrokenSocket()
+        with pytest.raises(RuntimeError, match="boom"):
+            await room.broadcast("hello")
+        # An unexpected error is not a normal disconnect -- the pid must
+        # stay connected rather than silently being treated as dropped.
+        assert room.connections[0] is not None
+
+    run(scenario())
+
+
+def test_room_broadcast_sends_to_all_targets_concurrently():
+    async def scenario():
+        room = Room("x", max_players=3)
+        received = []
+
+        class _RecordingSocket:
+            def __init__(self, pid):
+                self.pid = pid
+
+            async def send(self, text):
+                received.append(self.pid)
+
+        room.connections[0] = _RecordingSocket(0)
+        room.connections[1] = _RecordingSocket(1)
+        room.connections[2] = None
+        await room.broadcast("hello")
+        assert sorted(received) == [0, 1]
+
+    run(scenario())
+
+
+def test_input_log_is_trimmed_once_it_exceeds_the_cap(monkeypatch):
+    monkeypatch.setattr(server, "MAX_INPUT_LOG_ENTRIES", 10)
+    room = Room("x", max_players=1)
+    for room.tick in range(15):
+        room._record_tick({})
+    # No real 200,000-tick run needed to exercise the cap; confirms it
+    # actually bounds growth and keeps the newest entries.
+    assert len(room.input_log) <= 10
+    assert room.input_log[-1][0] == 14
 
 
 def test_second_join_message_mid_session_is_ignored_not_a_crash():

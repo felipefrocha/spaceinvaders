@@ -28,7 +28,7 @@ import random
 from dataclasses import dataclass, field
 
 from .config import Config
-from .input import Intent
+from .input import Intent, encode_inputs
 from .world import GameState, GameWorld
 
 
@@ -40,6 +40,15 @@ class RoundRecord:
     ``input_log`` — a round with no player input at all still has ``ticks``
     ticks of enemy movement/RNG-driven firing to replay, but would otherwise
     leave an empty log with no way to know how far to step.
+
+    ``ghost_pids`` lists pids that should start the replay ``alive=False`` —
+    a server ``Room`` sizes its world from room *capacity*
+    (``max_players``), not headcount, and a slot nobody ever joined starts
+    out not-alive (see ``Room.__init__``); without recording that here,
+    replaying a room with unfilled slots would reconstruct every pid as
+    alive and diverge from the room's real recorded state immediately.
+    Always empty for :func:`record_headless`, which has no join/ghost
+    concept — every headless player is a real, present participant.
     """
     seed: int
     cfg: dict
@@ -47,6 +56,7 @@ class RoundRecord:
     dt: float
     ticks: int
     input_log: list = field(default_factory=list)
+    ghost_pids: list = field(default_factory=list)
     final_hash: str = None
 
 
@@ -55,8 +65,10 @@ def record_headless(cfg: Config, seed: int, num_players: int, dt: float,
     """Run ``steps`` ticks of a fresh world and capture a :class:`RoundRecord`.
 
     ``inputs_by_step`` maps a step index to ``{pid: set(Intent)}``, exactly
-    like :func:`spaceinvaders.engine.run_headless`. Mirrors
-    ``Room.run``'s tick/log pattern so the two logs stay interchangeable.
+    like :func:`spaceinvaders.engine.run_headless`. Uses the same
+    :func:`~spaceinvaders.input.encode_inputs` that ``Room.run`` uses to build
+    its own log, so the two stay interchangeable by construction rather than
+    by convention.
     """
     inputs_by_step = inputs_by_step or {}
     world = GameWorld(cfg, rng=random.Random(seed), num_players=num_players)
@@ -68,11 +80,7 @@ def record_headless(cfg: Config, seed: int, num_players: int, dt: float,
         inputs = inputs_by_step.get(i) or {}
         world.step(dt, inputs)
         tick += 1
-        held_by_pid = {
-            pid: sorted(intent.name for intent in held)
-            for pid, held in inputs.items() if held
-        }
-        input_log.append((tick, held_by_pid))
+        input_log.append((tick, encode_inputs(inputs)))
     record = RoundRecord(
         seed=seed,
         cfg=dataclasses.asdict(cfg),
@@ -95,6 +103,8 @@ def replay(record: RoundRecord) -> GameWorld:
     cfg = Config(**record.cfg)
     world = GameWorld(cfg, rng=random.Random(record.seed),
                       num_players=record.num_players)
+    for pid in record.ghost_pids:
+        world.players[pid].alive = False
     inputs_by_tick = {
         tick: {
             int(pid): {Intent[name] for name in names}
@@ -137,6 +147,7 @@ def from_json(text: str) -> RoundRecord:
         dt=obj["dt"],
         ticks=obj["ticks"],
         input_log=input_log,
+        ghost_pids=obj.get("ghost_pids", []),
         final_hash=obj.get("final_hash"),
     )
 

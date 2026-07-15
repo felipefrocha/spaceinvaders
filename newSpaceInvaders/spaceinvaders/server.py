@@ -28,6 +28,7 @@ import websockets
 
 from . import protocol
 from .config import Config
+from .input import encode_inputs
 from .world import GameWorld
 
 TICK_HZ = 30
@@ -38,6 +39,11 @@ ROOM_IDLE_SECONDS = 60.0        # room is torn down once idle this long
 MIN_PLAYERS = 1
 MAX_PLAYERS = 5
 JOIN_TIMEOUT_SECONDS = 10.0
+# Caps Room.input_log's memory for a pathologically long-lived room (~3+
+# hours of continuous ticks at 30Hz); irrelevant for any realistic session.
+# Trimmed in a batch, not one entry at a time, so the amortized per-tick
+# cost stays O(1) instead of shifting the whole list on every append.
+MAX_INPUT_LOG_ENTRIES = 200_000
 
 
 class Room:
@@ -45,9 +51,16 @@ class Room:
 
     Player slots are fixed at room creation (``GameWorld`` sizes ship spacing
     from ``num_players`` at construction), so ``max_players`` is the room's
-    capacity, not a live headcount. A disconnected player's slot is held open
-    for :data:`RECONNECT_GRACE_SECONDS` and reclaimed by presenting the same
-    session token.
+    capacity, not a live headcount. A slot that has never been claimed by a
+    connection starts out ``alive=False`` (a "ghost" is not a participant, so
+    it can't be hit and doesn't block the LOST condition) and only becomes a
+    real, live player the moment someone actually joins that pid.
+
+    A disconnected player's slot is held open for
+    :data:`RECONNECT_GRACE_SECONDS` and reclaimed by presenting the same
+    session token; once that window elapses, the slot — and whatever game
+    state its player was left in — becomes available to any new joiner, not
+    just the original token holder.
     """
 
     def __init__(self, code: str, max_players: int, cfg: Config = None, seed: int = None):
@@ -57,6 +70,8 @@ class Room:
         self.seed = seed if seed is not None else secrets.randbits(32)
         self.world = GameWorld(self.cfg, rng=random.Random(self.seed),
                                num_players=max_players)
+        for player in self.world.players:
+            player.alive = False  # not a participant until someone actually joins
         self.connections = {}       # pid -> websocket | None (disconnected)
         self.tokens = {}            # pid -> session token
         self.held = {}              # pid -> set(Intent), current input state
@@ -66,8 +81,13 @@ class Room:
         self.task = None
 
     def _free_pid(self):
+        now = time.monotonic()
         for pid in range(self.max_players):
             if pid not in self.connections:
+                return pid
+            if (self.connections[pid] is None
+                    and self.disconnect_time.get(pid) is not None
+                    and now - self.disconnect_time[pid] > RECONNECT_GRACE_SECONDS):
                 return pid
         return None
 
@@ -75,11 +95,16 @@ class Room:
         """Assign (or reclaim) a pid for a connecting client.
 
         Returns ``(pid, session_token)``, or ``(None, None)`` if the room is
-        full and the token doesn't match an in-grace disconnected slot.
+        full and the token doesn't match a disconnected slot still within its
+        reconnect grace window.
         """
+        now = time.monotonic()
         if token:
             for pid, existing in self.tokens.items():
-                if existing == token and self.connections.get(pid) is None:
+                if (existing == token
+                        and self.connections.get(pid) is None
+                        and self.disconnect_time.get(pid) is not None
+                        and now - self.disconnect_time[pid] <= RECONNECT_GRACE_SECONDS):
                     self.connections[pid] = websocket
                     self.disconnect_time[pid] = None
                     return pid, token
@@ -88,10 +113,13 @@ class Room:
         if pid is None:
             return None, None
         new_token = secrets.token_urlsafe(16)
+        first_join = pid not in self.connections
         self.connections[pid] = websocket
         self.tokens[pid] = new_token
         self.held[pid] = set()
         self.disconnect_time[pid] = None
+        if first_join:
+            self.world.players[pid].alive = True
         return pid, new_token
 
     def leave(self, pid: int) -> None:
@@ -102,6 +130,11 @@ class Room:
     def is_idle(self) -> bool:
         """True once every slot that ever joined has been gone past the grace window."""
         if not self.connections:
+            # Not reachable via Room.run()/_handle_connection today (both only
+            # call is_idle() after a successful join), but all(...) over an
+            # empty generator is vacuously True — keep this guard so a future
+            # caller can't have a brand-new, never-joined room misclassified
+            # as idle and torn down.
             return False
         now = time.monotonic()
         return all(
@@ -111,16 +144,28 @@ class Room:
         )
 
     async def broadcast(self, text: str) -> None:
+        targets = [(pid, ws) for pid, ws in self.connections.items() if ws is not None]
+        if not targets:
+            return
+        results = await asyncio.gather(
+            *(ws.send(text) for _, ws in targets), return_exceptions=True)
         dropped = []
-        for pid, ws in list(self.connections.items()):
-            if ws is None:
-                continue
-            try:
-                await ws.send(text)
-            except websockets.ConnectionClosed:
+        for (pid, _), result in zip(targets, results):
+            if isinstance(result, websockets.ConnectionClosed):
                 dropped.append(pid)
+            elif isinstance(result, BaseException):
+                raise result
         for pid in dropped:
             self.leave(pid)
+
+    def _record_tick(self, inputs) -> None:
+        """Append one tick's inputs to the log, trimmed in a batch once it's
+        over :data:`MAX_INPUT_LOG_ENTRIES` (not one entry at a time, which
+        would turn a rare event into an O(n) shift on every subsequent tick).
+        """
+        self.input_log.append((self.tick, encode_inputs(inputs)))
+        if len(self.input_log) > MAX_INPUT_LOG_ENTRIES:
+            del self.input_log[:len(self.input_log) - MAX_INPUT_LOG_ENTRIES // 2]
 
     async def run(self) -> None:
         """The authoritative tick loop. One instance per room, while non-idle."""
@@ -130,11 +175,7 @@ class Room:
             inputs = {pid: self.held.get(pid, frozenset()) for pid in self.connections}
             self.world.step(DT, inputs)
             self.tick += 1
-            self.input_log.append((
-                self.tick,
-                {pid: sorted(intent.name for intent in held)
-                 for pid, held in inputs.items() if held},
-            ))
+            self._record_tick(inputs)
             if self.tick % SEND_EVERY_N_TICKS == 0:
                 await self.broadcast(protocol.snapshot_message(self.tick, self.world.snapshot()))
             next_tick_at += DT

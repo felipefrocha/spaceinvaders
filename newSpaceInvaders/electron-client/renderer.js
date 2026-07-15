@@ -151,10 +151,24 @@ class Connection {
     ws.addEventListener('error', () => {});
   }
 
-  /** Resolves with this connection's pid once a welcome has been received. */
+  /**
+   * Resolves with this connection's pid once a welcome has been received, or
+   * rejects if the connection gives up before ever completing a handshake
+   * (see _scheduleReconnect()'s exhausted-attempts branch) — without this,
+   * a caller doing `await conn.waitForWelcome()` would hang forever on a
+   * connection that never manages to join.
+   */
   waitForWelcome() {
     if (this.pid !== null) return Promise.resolve(this.pid);
-    return new Promise((resolve) => this._welcomeWaiters.push(resolve));
+    return new Promise((resolve, reject) => this._welcomeWaiters.push({ resolve, reject }));
+  }
+
+  _settleWelcomeWaiters(pid, error) {
+    const waiters = this._welcomeWaiters.splice(0);
+    for (const { resolve, reject } of waiters) {
+      if (error) reject(error);
+      else resolve(pid);
+    }
   }
 
   disconnect() {
@@ -168,6 +182,7 @@ class Connection {
       try { this.ws.close(); } catch (err) { /* already closed */ }
       this.ws = null;
     }
+    this._settleWelcomeWaiters(null, new Error('connection closed before joining'));
   }
 
   _handleMessage(msg) {
@@ -179,7 +194,7 @@ class Connection {
         this._setStatus('connected');
         this._startInputTimer();
         this.onWelcome(msg, this);
-        this._welcomeWaiters.splice(0).forEach((resolve) => resolve(this.pid));
+        this._settleWelcomeWaiters(this.pid, null);
         break;
       case 'snapshot':
         this.onSnapshot(msg, this);
@@ -201,7 +216,9 @@ class Connection {
   _scheduleReconnect() {
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this._setStatus('disconnected');
-      this.onError('Conexão perdida — número máximo de tentativas de reconexão atingido.');
+      const message = 'Conexão perdida — número máximo de tentativas de reconexão atingido.';
+      this.onError(message);
+      this._settleWelcomeWaiters(null, new Error(message));
       return;
     }
     this._setStatus('reconnecting');
@@ -246,12 +263,14 @@ let usingLocalServer = false; // whether main.js spawned a child python process 
 let cfg = DEFAULT_CFG;
 let snapshotBuffer = [];      // [{recvTime, data}], oldest first
 let unsubscribeLocalExit = null;
+let lastHudKey = null;        // dirty-check guard for updateHud(), reset per session
 
 function resetGameState() {
   activeConnections = [];
   primaryConnection = null;
   cfg = DEFAULT_CFG;
   snapshotBuffer = [];
+  lastHudKey = null;
   overlayMessage.classList.add('hidden');
   hudPlayers.innerHTML = '';
 }
@@ -428,14 +447,22 @@ function drawFrame(frame) {
 }
 
 function updateHud(frame) {
-  hudPlayers.innerHTML = '';
+  // Snapshots (and the score/lives/alive fields driving the HUD) only change
+  // at the server's ~15Hz broadcast rate, but this is called every rAF tick
+  // (~60Hz) — skip the DOM rebuild entirely when nothing HUD-relevant changed
+  // since the last call.
   const sorted = [...frame.players].sort((a, b) => a.pid - b.pid);
-  for (const p of sorted) {
-    const span = document.createElement('span');
-    span.className = 'hud-player';
-    span.style.color = PLAYER_COLORS[p.pid % PLAYER_COLORS.length];
-    span.textContent = `P${p.pid + 1}  pontos ${p.score}  vidas ${p.lives}${p.alive ? '' : ' (destruído)'}`;
-    hudPlayers.appendChild(span);
+  const key = sorted.map((p) => `${p.pid}:${p.score}:${p.lives}:${p.alive}`).join('|');
+  if (key !== lastHudKey) {
+    lastHudKey = key;
+    hudPlayers.innerHTML = '';
+    for (const p of sorted) {
+      const span = document.createElement('span');
+      span.className = 'hud-player';
+      span.style.color = PLAYER_COLORS[p.pid % PLAYER_COLORS.length];
+      span.textContent = `P${p.pid + 1}  pontos ${p.score}  vidas ${p.lives}${p.alive ? '' : ' (destruído)'}`;
+      hudPlayers.appendChild(span);
+    }
   }
 
   if (frame.state === 'RUNNING') {
@@ -514,7 +541,15 @@ async function startLocalGame(numLocalPlayers) {
   const callbacks = makeConnectionCallbacks();
   const connA = new Connection({ url, room: null, keymap: KEYMAP_P1, label: 'P1', ...callbacks });
   connA.connect();
-  await connA.waitForWelcome();
+  try {
+    await connA.waitForWelcome();
+  } catch (err) {
+    connA.disconnect();
+    await teardownGame();
+    showScreen('menu');
+    setMenuError('Não foi possível conectar ao servidor local. Tente novamente.');
+    return;
+  }
   primaryConnection = connA;
   activeConnections = [connA];
 
@@ -525,11 +560,32 @@ async function startLocalGame(numLocalPlayers) {
     // the arrow-keys player, matching spaceinvaders/input.py's convention.
     const connB = new Connection({ url, room: null, keymap: KEYMAP_P2, label: 'P2', ...callbacks });
     connB.connect();
-    await connB.waitForWelcome();
+    try {
+      await connB.waitForWelcome();
+    } catch (err) {
+      await teardownGame();
+      showScreen('menu');
+      setMenuError('Não foi possível conectar o Jogador 2 ao servidor local. Tente novamente.');
+      return;
+    }
     activeConnections = [connA, connB];
   }
 
   refreshStatusUI();
+}
+
+/**
+ * Mint a room code for online play when the user leaves the field blank.
+ * The server defaults an omitted room to its own shared "default" room
+ * (see spaceinvaders/server.py) — fine for local co-op, where both local
+ * connections rely on that same implicit sharing against a private,
+ * freshly-spawned local server, but wrong for online play against a public
+ * host: two strangers who both leave the field blank would otherwise be
+ * silently placed in the same room. Minting a private code here means
+ * "blank" always means "just for me" for online play specifically.
+ */
+function generatePrivateRoomCode() {
+  return `solo-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** Online play: connect to a user-supplied host:port, single local player. */
@@ -543,11 +599,12 @@ function startOnlineGame(hostPort, room) {
     url = `ws://${url}`;
   }
 
+  const roomCode = room || generatePrivateRoomCode();
   const callbacks = makeConnectionCallbacks();
   // A single local player online always uses the WASD+Space (P1) scheme,
   // regardless of which pid the server ends up assigning — with only one
   // local connection there's no ambiguity about whose keys these are.
-  const conn = new Connection({ url, room: room || null, keymap: KEYMAP_P1, label: 'Jogador', ...callbacks });
+  const conn = new Connection({ url, room: roomCode, keymap: KEYMAP_P1, label: 'Jogador', ...callbacks });
   primaryConnection = conn;
   activeConnections = [conn];
   conn.connect();

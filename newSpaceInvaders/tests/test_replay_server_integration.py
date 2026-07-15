@@ -1,7 +1,7 @@
 import dataclasses
 
 from spaceinvaders.config import Config
-from spaceinvaders.input import Intent
+from spaceinvaders.input import Intent, encode_inputs
 from spaceinvaders.replay import RoundRecord, replay, state_hash
 from spaceinvaders.server import DT, Room
 
@@ -19,6 +19,7 @@ def make_room(max_players, cfg=None, seed=1):
         room.connections[pid] = object()
         room.held[pid] = set()
         room.disconnect_time[pid] = None
+        room.world.players[pid].alive = True  # mirrors Room.join()'s first-join activation
     return room
 
 
@@ -27,11 +28,7 @@ def step_room_once(room):
     inputs = {pid: room.held.get(pid, frozenset()) for pid in room.connections}
     room.world.step(DT, inputs)
     room.tick += 1
-    room.input_log.append((
-        room.tick,
-        {pid: sorted(intent.name for intent in held)
-         for pid, held in inputs.items() if held},
-    ))
+    room.input_log.append((room.tick, encode_inputs(inputs)))
 
 
 def record_from_room(room) -> RoundRecord:
@@ -42,6 +39,12 @@ def record_from_room(room) -> RoundRecord:
         dt=DT,
         ticks=room.tick,
         input_log=room.input_log,
+        # A pid that never joined at all (never in room.connections) is a
+        # permanent ghost and must start the replay not-alive. This is NOT
+        # the same as "currently not alive" -- a real player who died in
+        # combat mid-round is very much still a pid in room.connections and
+        # must replay as alive from tick 0, exactly like the room did.
+        ghost_pids=[pid for pid in range(room.max_players) if pid not in room.connections],
     )
 
 
@@ -94,6 +97,41 @@ def test_replay_matches_when_a_joined_pid_never_sends_any_input():
     replayed_world = replay(record)
 
     assert state_hash(replayed_world) == state_hash(room.world)
+
+
+def test_replay_matches_with_a_never_joined_ghost_pid_present():
+    # max_players=3 but only pid 0 ever joins -- pids 1 and 2 stay permanent
+    # ghosts (never in room.connections), matching a real online room where
+    # capacity exceeds headcount. This is the scenario record_from_room's
+    # ghost_pids field exists for.
+    room = Room("integration", max_players=3, cfg=small_cfg(), seed=55)
+    room.connections[0] = object()
+    room.held[0] = set()
+    room.disconnect_time[0] = None
+    room.world.players[0].alive = True
+
+    for i in range(20):
+        room.held[0] = {Intent.RIGHT, Intent.FIRE}
+        step_room_once(room)
+
+    record = record_from_room(room)
+    assert record.ghost_pids == [1, 2]
+    replayed_world = replay(record)
+
+    assert state_hash(replayed_world) == state_hash(room.world)
+
+
+def test_ghost_pids_reflects_join_membership_not_current_alive_state():
+    # A joined player who died in combat mid-round is NOT a ghost -- they
+    # were alive at round start and a replay must reproduce that, not start
+    # them dead. Only a pid that never appeared in room.connections at all
+    # is a ghost. record_from_room's ghost_pids must key off connections
+    # membership, not .alive, since a real player's alive state changes
+    # constantly through ordinary gameplay.
+    room = make_room(max_players=2, seed=3)
+    room.world.players[0].alive = False  # simulates dying in combat, still joined
+    record = record_from_room(room)
+    assert record.ghost_pids == []
 
 
 def test_replay_matches_when_a_player_disconnects_mid_round():
