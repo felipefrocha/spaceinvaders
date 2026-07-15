@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:;" />
+<title>Space Invaders — Cliente Electron</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ============================== MAIN MENU ============================== -->
+  <section id="screen-menu" class="screen">
+    <h1 class="title">SPACE&nbsp;INVADERS</h1>
+    <p class="subtitle">Cliente Electron — servidor autoritativo Python</p>
+
+    <div class="menu-buttons">
+      <button id="btn-single" class="menu-btn">Um Jogador</button>
+      <button id="btn-coop" class="menu-btn">2 Jogadores (Local)</button>
+      <button id="btn-online" class="menu-btn">Online</button>
+    </div>
+
+    <p class="hint">
+      P1: W A S D + Espaço&nbsp;&nbsp;|&nbsp;&nbsp;P2: Setas + Enter
+    </p>
+    <p id="menu-error" class="error-text"></p>
+  </section>
+
+  <!-- ============================== ONLINE FORM ============================== -->
+  <section id="screen-online" class="screen hidden">
+    <h2>Conectar Online</h2>
+    <form id="form-online">
+      <label>
+        Servidor (host:porta)
+        <input id="input-host" type="text" placeholder="127.0.0.1:8765" value="127.0.0.1:8765" />
+      </label>
+      <label>
+        Código da sala (opcional)
+        <input id="input-room" type="text" placeholder="ex: amigos123" maxlength="32" />
+      </label>
+      <p class="hint">Deixe em branco para uma sala privada só sua; combine um código com seus amigos para jogar juntos.</p>
+      <div class="form-buttons">
+        <button type="submit" id="btn-connect" class="menu-btn">Conectar</button>
+        <button type="button" id="btn-online-back" class="menu-btn secondary">Voltar</button>
+      </div>
+    </form>
+    <p id="online-error" class="error-text"></p>
+  </section>
+
+  <!-- ============================== GAME SCREEN ============================== -->
+  <section id="screen-game" class="screen hidden">
+    <div id="hud">
+      <div id="hud-players"></div>
+      <div id="hud-status">
+        <span id="status-dot" class="status-dot status-connecting"></span>
+        <span id="status-text">conectando…</span>
+      </div>
+      <button id="btn-back-to-menu" class="menu-btn small">Menu</button>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="game-canvas" width="640" height="680"></canvas>
+      <div id="overlay-message" class="overlay-message hidden"></div>
+    </div>
+  </section>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

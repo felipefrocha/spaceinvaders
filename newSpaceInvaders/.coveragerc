@@ -1,0 +1,13 @@
+[run]
+branch = True
+source = spaceinvaders
+omit =
+    # Turtle backend needs a live display; exercised manually, not in unit tests.
+    spaceinvaders/turtle_app.py
+    spaceinvaders/__main__.py
+
+[report]
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError

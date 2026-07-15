@@ -1,28 +1,78 @@
-# Space Invaders
+# Space Invaders — Multiplayer
 ## Trabalho final de ATR
-### Introdução
-Space Invaders é e um jogo de arcade criado em 1978 por Tomohiro Nishikado e licenciado pela Taito Corporation. Trata-se de um dos primeiros jogos de tiro com gráficos em duas dimensões, inspirado em obras como Guerra dos Mundos e Star Wars. O objetivo principal do jogo é impedir uma invasão de naves alienígenas, utilizando uma arma terráquea para fazer a maior pontuação possível.
 
-Para fazer a programação deste jogo foram utilizado conceitos de automação em tempo real, incluindo threads com dispositivos para controlarem problemas ocorridos em programação concorrente.
+Clone do clássico *Space Invaders* para **dois jogadores no mesmo teclado**,
+reescrito sobre uma **arquitetura desacoplada** com um núcleo de simulação puro
+(sem `turtle`, sem threads) e uma camada de renderização fina isolada.
 
-Além disso, como o logger poderia ficar em outra máquina, foi necessário utilizar de um socket para realizar a parte da comunicação.
-### Objetivo
-O objetivo deste trabalho é programar um jogo inspirado no game clássico  “Space Invaders”. Neste programa o jogador controla uma nave e tem como objetivo destruir as naves inimigas e desviar dos ataques provenientes das mesmas.
+### Jogabilidade
 
-O jogo possui diversas fases sendo que a dificuldade aumenta conforme o usuário for passando por elas. Para controlar a nave o usuário utiliza o teclado enquanto visualiza uma tela gráfica semelhante a imagem abaixo.
+Duas naves cooperam para destruir a formação de invasores antes que ela alcance
+a base. Cada acerto vale pontos; cada jogador tem suas próprias vidas.
 
-### Instalação
-Por questãoes de praticidade indica se a utilização de do pacote de gestão de ambiente da aplicação o `python3 -m pip3 install venv` dessa forma garante se a estabilidade da aplicação para o ambiente do usuário.
+| Ação      | Jogador 1 (WASD) | Jogador 2 (setas) |
+|-----------|------------------|-------------------|
+| Cima      | `W`              | `↑`               |
+| Esquerda  | `A`              | `←`               |
+| Baixo     | `S`              | `↓`               |
+| Direita   | `D`              | `→`               |
+| Atirar    | `Espaço`         | `Enter`           |
 
-Existe um descritivo de ambiente colocado como `requirements.txt` utilizado pelo `pip3
- para descrever o ambiente da aplicação durante a instanciação do amviente virtual.
- 
-````
-# intalaçao do python 3 -- a versão utilizada no trabalho foi a 3.6
-sudo apt install python3 pip3
-# instalaçao do venv
-python3 -m pip3 install venv
-# instalaçao dos requirements
-pip3 install -r requirements.txt
+### Como executar
 
-python3 git game.py
+O jogo precisa de um display gráfico e do módulo `tkinter` (pacote
+`python3-tk` na maioria das distribuições). O núcleo não tem dependências
+além da biblioteca padrão.
+
+```bash
+cd newSpaceInvaders
+python3 -m spaceinvaders        # abre a janela do jogo (2 jogadores)
+```
+
+### Arquitetura (desacoplada por camadas)
+
+O código vive no pacote `spaceinvaders/`. Cada camada depende apenas das
+camadas abaixo dela — a lógica do jogo **não conhece** teclado nem tela:
+
+```
+config.py     parâmetros imutáveis (tamanhos, velocidades, formação)
+geometry.py   clamp + colisão AABB (sem dependências)
+input.py      Intent + mapas de teclas (WASD / setas) + InputState
+entities.py   Player / Enemy / Bullet — dados + regras locais, nada de I/O
+world.py      GameWorld: simulação determinística, um passo por quadro
+engine.py     GameLoop.tick(dt) + run_headless() — dirige o mundo sem tela
+renderer.py   interface Renderer + NullRenderer (execução sem display)
+turtle_app.py única camada que importa `turtle` (tela, teclas, ontimer)
+```
+
+Pontos de projeto:
+
+- **Desempenho:** um único laço de tempo fixo na thread principal
+  (`screen.ontimer`), estado em listas simples e entrada por conjuntos
+  (`set`) O(1). Não há thread nem semáforo por entidade (como na versão
+  antiga) — nada de contenção nem `pickle`.
+- **Determinismo/testabilidade:** o RNG é injetado em `GameWorld`, e o mundo
+  avança por `dt` explícito. Assim a simulação inteira roda *headless* em
+  testes via `run_headless()`.
+- **Renderização isolada:** o mundo expõe `snapshot()` (um `dict` simples); o
+  renderer desenha a partir disso e nunca toca nos objetos internos.
+
+### Testes
+
+Testes unitários com `pytest`; cobertura medida sobre o núcleo (o backend
+`turtle_app.py` é excluído porque exige display).
+
+```bash
+cd newSpaceInvaders
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest --cov --cov-report=term-missing
+```
+
+O núcleo está com **100% de cobertura** (meta do trabalho: ≥ 90%).
+
+### Código legado
+
+Os arquivos `game.py`, `Enemy.py`, `Player.py`, `Disparo.py`, `Score.py`,
+`testes.py`, `constants.py` e `logServer.py` são a **implementação original**
+(modelo thread-por-entidade + `turtle`) e foram mantidos apenas como registro
+histórico do trabalho. A versão viável e testada é o pacote `spaceinvaders/`.
