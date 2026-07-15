@@ -21,6 +21,65 @@ def test_spawns_two_players_by_default():
     assert w.players[0].x < w.players[1].x
 
 
+def test_all_players_active_by_default():
+    w = GameWorld(small_cfg(), num_players=3)
+    assert all(p.active for p in w.players)
+    assert len(w.snapshot()["players"]) == 3
+
+
+def test_active_pids_constructor_marks_only_listed_slots_active():
+    w = GameWorld(small_cfg(), num_players=3, active_pids={0, 2})
+    assert [p.active for p in w.players] == [True, False, True]
+    # Inactive slots are absent from the snapshot, not shown as phantoms.
+    assert [p["pid"] for p in w.snapshot()["players"]] == [0, 2]
+
+
+def test_empty_active_pids_means_no_participants():
+    w = GameWorld(small_cfg(), num_players=2, active_pids=set())
+    assert all(not p.active for p in w.players)
+    assert w.snapshot()["players"] == []
+
+
+def test_activate_player_promotes_a_slot():
+    w = GameWorld(small_cfg(), num_players=2, active_pids=set())
+    w.activate_player(1)
+    assert w.players[1].active is True
+    assert w.players[0].active is False
+
+
+def test_inactive_player_is_not_hit_by_enemy_bullets():
+    w = GameWorld(small_cfg(), num_players=2, active_pids={0})
+    ghost = w.players[1]
+    lives_before = ghost.lives
+    w.bullets.append(Bullet(x=ghost.x, y=ghost.y, vy=0.0, owner=ENEMY_OWNER))
+    w._resolve_collisions()
+    assert ghost.lives == lives_before      # untouched
+    assert w.bullets[0].alive is True        # bullet passed through the ghost
+
+
+def test_inactive_player_does_not_move_on_input():
+    w = GameWorld(small_cfg(), num_players=2, active_pids={0})
+    ghost = w.players[1]
+    x_before = ghost.x
+    w.step(0.5, {1: {Intent.RIGHT}})
+    assert ghost.x == x_before
+
+
+def test_no_active_players_is_not_a_loss():
+    # An unfilled/empty roster is a lobby, not a defeat -- even though
+    # "all active players are dead" is vacuously true over zero players.
+    w = GameWorld(small_cfg(), num_players=2, active_pids=set())
+    w.step(0.1)
+    assert w.state is GameState.RUNNING
+
+
+def test_loss_counts_only_active_players():
+    w = GameWorld(small_cfg(), num_players=3, active_pids={0})
+    w.players[0].alive = False
+    w.step(0.1)
+    assert w.state is GameState.LOST
+
+
 def test_formation_size_matches_rows_times_cols():
     w = GameWorld(Config(enemy_rows=3, enemy_cols=8, enemy_fire_chance=0.0))
     assert len(w.enemies) == 24

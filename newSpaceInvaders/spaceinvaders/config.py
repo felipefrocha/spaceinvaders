@@ -10,6 +10,15 @@ world (few enemies, fast cooldowns) without touching the real defaults.
 """
 from dataclasses import dataclass
 
+# The simulation's fixed timestep — the single source of truth every frame
+# driver multiplies the per-second speeds in Config by. Both the offline
+# turtle loop and the online server import DT from here so a round advances by
+# the *same* dt on every path (a replay recorded on one path reproduces
+# bit-identically on another). Speeds below are units/second; DT turns them
+# into per-tick deltas.
+TICK_HZ = 30
+DT = 1.0 / TICK_HZ
+
 
 @dataclass(frozen=True)
 class Config:

@@ -1,10 +1,15 @@
-"""Rendering seam.
+"""Rendering seam for the in-process path.
 
 The engine emits a plain-dict :meth:`~spaceinvaders.world.GameWorld.snapshot`
-each frame; a renderer turns that into pixels. Keeping this an interface means
-the simulation can run fully headless (tests, benchmarks, a future network
-server) with :class:`NullRenderer`, while the turtle backend lives behind the
-same contract in :mod:`spaceinvaders.turtle_app`.
+each frame; a :class:`Renderer` turns that into pixels. Keeping it an interface
+lets the offline loop run fully headless (tests, benchmarks) with
+:class:`NullRenderer`, while the turtle backend draws behind the same contract
+in :mod:`spaceinvaders.turtle_app`.
+
+The online server does not use this interface: it *serialises* the same
+``snapshot()`` dict and broadcasts it (see :mod:`spaceinvaders.server`), and
+the remote client draws it. So the portable seam is ``snapshot()`` itself —
+this ``Renderer`` interface is just the in-process consumer of it.
 """
 
 

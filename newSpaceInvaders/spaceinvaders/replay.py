@@ -41,14 +41,13 @@ class RoundRecord:
     ticks of enemy movement/RNG-driven firing to replay, but would otherwise
     leave an empty log with no way to know how far to step.
 
-    ``ghost_pids`` lists pids that should start the replay ``alive=False`` —
-    a server ``Room`` sizes its world from room *capacity*
-    (``max_players``), not headcount, and a slot nobody ever joined starts
-    out not-alive (see ``Room.__init__``); without recording that here,
-    replaying a room with unfilled slots would reconstruct every pid as
-    alive and diverge from the room's real recorded state immediately.
-    Always empty for :func:`record_headless`, which has no join/ghost
-    concept — every headless player is a real, present participant.
+    ``active_pids`` is the set of participant slots to reconstruct the world
+    with (passed straight to :class:`~spaceinvaders.world.GameWorld`) — a
+    server ``Room`` sizes its world from *capacity* (``max_players``), not
+    headcount, so a room with unfilled slots must record which pids were
+    actually playing or the replay would reconstruct every slot as active and
+    diverge immediately. ``None`` (the default, and what
+    :func:`record_headless` produces) means every slot is active.
     """
     seed: int
     cfg: dict
@@ -56,7 +55,7 @@ class RoundRecord:
     dt: float
     ticks: int
     input_log: list = field(default_factory=list)
-    ghost_pids: list = field(default_factory=list)
+    active_pids: list = None
     final_hash: str = None
 
 
@@ -102,9 +101,8 @@ def replay(record: RoundRecord) -> GameWorld:
     """
     cfg = Config(**record.cfg)
     world = GameWorld(cfg, rng=random.Random(record.seed),
-                      num_players=record.num_players)
-    for pid in record.ghost_pids:
-        world.players[pid].alive = False
+                      num_players=record.num_players,
+                      active_pids=record.active_pids)
     inputs_by_tick = {
         tick: {
             int(pid): {Intent[name] for name in names}
@@ -147,7 +145,7 @@ def from_json(text: str) -> RoundRecord:
         dt=obj["dt"],
         ticks=obj["ticks"],
         input_log=input_log,
-        ghost_pids=obj.get("ghost_pids", []),
+        active_pids=obj.get("active_pids"),
         final_hash=obj.get("final_hash"),
     )
 

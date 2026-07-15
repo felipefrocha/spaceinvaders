@@ -23,6 +23,12 @@ class Player:
     w: float = 20.0
     h: float = 20.0
     score: int = 0
+    # `active` = is this slot a participant this round (someone is/was playing
+    # it)? `alive` = has it survived combat? They are distinct: a never-joined
+    # online slot is inactive (not simulated, not rendered, ignored by the
+    # win/loss check), while a joined player who died is active-but-not-alive.
+    # Offline play and tests leave every slot active (the default).
+    active: bool = True
     alive: bool = True
     _cooldown_left: float = 0.0
 

@@ -1,10 +1,19 @@
-"""Frame driving, independent of any windowing backend.
+"""In-process frame driving for the offline/local path.
 
-:class:`GameLoop` ties together a world, the per-player input states and a
-renderer, and exposes a single :meth:`tick` that a real backend calls from a
-timer (see :mod:`spaceinvaders.turtle_app`). Because ``tick`` takes an explicit
+:class:`GameLoop` ties together a world, the per-player :class:`InputState`
+objects (raw key names in, held :class:`Intent` sets out) and a renderer, and
+exposes a single :meth:`tick` that a synchronous backend calls from a timer
+(see :mod:`spaceinvaders.turtle_app`). Because ``tick`` takes an explicit
 ``dt`` and never touches the clock or the screen, the exact same loop can be
-driven synchronously in a test or a benchmark via :func:`run_headless`.
+driven synchronously in a test or benchmark via :func:`run_headless`.
+
+Scope note: this is the *offline* driver. The online server does **not** use
+``GameLoop`` — it runs its own async tick loop (``server.Room.run``) because
+its inputs arrive over the wire as pre-mapped ``Intent`` names (no
+``InputState``/keymap server-side) and its output is a broadcast rather than a
+``Renderer``. Both drivers converge on the one thing that is actually shared:
+``world.step(dt, inputs)`` + ``world.snapshot()``. That seam — not this loop —
+is the "single engine".
 """
 from .input import DEFAULT_KEYMAPS, InputState
 from .renderer import NullRenderer

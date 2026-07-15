@@ -10,13 +10,12 @@ instead of creating a turtle per entity every frame, which keeps redraw cheap.
 """
 import turtle
 
-from .config import Config
+from .config import DT, Config
 from .engine import GameLoop
 from .input import KEYMAP_P1, KEYMAP_P2
 from .world import GameWorld
 
-TICK_MS = 33  # ~30 FPS
-DT = TICK_MS / 1000.0
+TICK_MS = round(DT * 1000)  # ontimer granularity is integer ms (~30 FPS)
 
 _COLORS = {
     "player": ("cyan", "royal blue"),

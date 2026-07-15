@@ -42,19 +42,32 @@ Strictly layered; each module depends only on those below it, and the game logic
 nothing about the keyboard or the screen:
 
 - `config.py` — one frozen `Config` dataclass; speeds are **units/second** (multiply by `dt`).
+  Also the **single source of truth for the timestep**: `TICK_HZ`/`DT` live here so every frame
+  driver (turtle loop, server) advances by the same `dt` and replays stay bit-identical.
 - `geometry.py` — `clamp` + `aabb_overlap` (centre-anchored boxes). No dependencies.
-- `input.py` — `Intent` enum, `KEYMAP_P1`/`KEYMAP_P2`, and `InputState` (held-key `set`). The
-  seam that decouples the sim from any keyboard backend.
-- `entities.py` — `Player`/`Enemy`/`Bullet`: data + local update rules, no I/O.
+- `input.py` — `Intent` enum, `KEYMAP_P1`/`KEYMAP_P2`, `InputState` (held-key `set`), and
+  `encode_inputs` (the one wire/log encoder shared by server + replay). `InputState`/keymaps are
+  used by the **offline** path only; online input arrives as pre-mapped `Intent` names (the
+  client owns the keymap). The seam that decouples the sim from any keyboard backend.
+- `entities.py` — `Player`/`Enemy`/`Bullet`: data + local update rules, no I/O. Note `Player`
+  has **`active`** (is this slot a participant this round?) distinct from **`alive`** (survived
+  combat?) — see the online section.
 - `world.py` — `GameWorld`: the **deterministic** simulation. `step(dt, inputs)` advances one
   frame; `inputs` is `{pid: set(Intent)}`. RNG is **injected** for testability. Rendering reads
-  `snapshot()` (a plain dict), never the internal objects.
+  `snapshot()` (a plain dict; inactive slots are omitted), never the internal objects.
+  `active_pids` (ctor) + `activate_player(pid)` are the only occupancy controls — nothing else
+  reaches into player state.
 - `engine.py` — `GameLoop.tick(dt)` (owns world + per-player `InputState` + renderer) and
-  `run_headless(...)` for driving the sim with no screen (tests/benchmarks).
-- `renderer.py` — `Renderer` interface + `NullRenderer`. Headless-safe.
+  `run_headless(...)` for driving the sim with no screen. **Offline driver only** — the server
+  has its own async loop (see below); the two share `world.step`/`snapshot`, not this loop.
+- `renderer.py` — `Renderer` interface + `NullRenderer`. In-process consumer of `snapshot()`;
+  the server broadcasts the same dict instead of using this interface.
 - `turtle_app.py` — the **only** module that imports `turtle`. Owns the `Screen`, binds both
   key maps via `onkeypress`/`onkeyrelease`, and re-arms a single `ontimer` frame callback on the
   main thread. `TurtleRenderer` uses a stamp pool. Excluded from coverage.
+
+The portable seam across every path is exactly **`world.step(dt, inputs)` + `world.snapshot()`
++ injected RNG** — that (not any single loop or renderer) is what "one engine" means here.
 
 Design intent to preserve when editing: **single-threaded fixed-timestep loop** (no thread/
 semaphore per entity like the legacy engine — that is the performance answer), determinism via
@@ -71,15 +84,21 @@ An **authoritative server** for up to 5 synced players, built on the exact same 
   input). This is the deliberate, security-motivated replacement for the legacy
   `logServer.py`'s `pickle.loads()`-on-the-network pattern — **never reintroduce pickle for
   anything touching a socket.** Read the module docstring for the exact message shapes.
-- `server.py` — `Room` (one `GameWorld` + per-pid connections/tokens/held-input + a 30 Hz tick
-  loop broadcasting snapshots every other tick, ~15 Hz) and `RoomRegistry` (room-code → `Room`,
-  created lazily on join). `start_server(host, port, max_players, cfg)` returns a running
-  `websockets` server — pass `port=0` for an ephemeral port (used by both tests and local/offline
-  play). Reconnect: a disconnected pid's slot is held for `RECONNECT_GRACE_SECONDS` and reclaimed
-  by presenting the same session token issued in `welcome`.
-- **Offline play reuses this same server**, spawned as a local child process on an ephemeral
-  port (it prints `PORT=<n>` to stdout as its first line) — there is deliberately only one game
-  engine and one network protocol, whether the other end is a local process or a remote peer.
+- `server.py` — `Room` (one `GameWorld` + per-pid connections/tokens/held-input + its **own**
+  async 30 Hz tick loop — `Room.run`, not `engine.GameLoop` — broadcasting snapshots every other
+  tick, ~15 Hz) and `RoomRegistry` (room-code → `Room`, created lazily on join). `start_server(...)`
+  returns a running `websockets` server — pass `port=0` for an ephemeral port (used by tests and
+  local/offline play). Reconnect: a disconnected pid's slot is held for `RECONNECT_GRACE_SECONDS`
+  and reclaimed by presenting the same session token; past that window the slot frees for any new
+  joiner. **Occupancy:** a `Room` sizes its world at `max_players` (capacity) but starts it with
+  an empty active set and calls `world.activate_player(pid)` as clients join — so an unclaimed
+  slot is never simulated, rendered, or counted toward the loss. The server never touches player
+  fields directly; `activate_player` + `step`/`snapshot` are its only world surface.
+- **Offline Electron play reuses this same server**, spawned as a local child process on an
+  ephemeral port (it prints `PORT=<n>` to stdout as its first line) — the same one engine and one
+  protocol whether the peer is a local process or remote. (The **turtle** client is the exception:
+  it drives the core in-process via `engine.GameLoop` and never touches the server or protocol at
+  all — so "same core" spans both frontends, but "same protocol" is the Electron/server axis only.)
 - `replay.py` — deterministic record/replay (`RoundRecord`, `record_headless`, `replay`,
   `state_hash`) built directly from `Room.input_log`'s shape (`[(tick, {pid: [intent_name,...]})]`).
   This is the desync-detection and reproducibility primitive: replaying the same `(seed, cfg,
@@ -103,9 +122,12 @@ JSON wire format over WebSocket — never Python FFI. `main.js` spawns a local `
 child process for offline/local-co-op play and connects directly to a remote host:port for online
 play; the renderer draws `snapshot()` on a `<canvas>`, sends `held`-intent-set `input` frames, and
 mirrors the same **WASD (P1) / arrows (P2)** control scheme as `spaceinvaders/input.py`. See
-`electron-client/README.md` for how to run it. The `turtle_app.py` client is unaffected and remains
-the offline/2p-local reference implementation — the two frontends are independent consumers of the
-same core and protocol, not a replacement of one by the other.
+`electron-client/README.md` for how to run it. Online play with a blank room-code field gets a
+private auto-generated code client-side (so strangers aren't dropped into the shared `"default"`
+room). The `turtle_app.py` client is unaffected and remains the offline/2p-local reference
+implementation — the two frontends are independent consumers of the same **core** (`world`), but
+only the Electron client speaks the **protocol**; the turtle client uses `engine.GameLoop`
+in-process, so it is not a protocol consumer at all.
 
 ## Legacy engine (kept as historical artifact — not the live game)
 

@@ -30,15 +30,35 @@ _EMPTY_HELD = frozenset()
 
 class GameWorld:
     def __init__(self, cfg: Config = None, rng: random.Random = None,
-                 num_players: int = 2):
+                 num_players: int = 2, active_pids=None):
+        """Build a world of ``num_players`` slots.
+
+        ``active_pids`` is the initial set of *participant* slots; ``None``
+        (the default) means every slot is active — the offline/turtle and test
+        case. The server passes an empty set and calls :meth:`activate_player`
+        as clients actually join, so a slot nobody claimed never enters the
+        game (see :class:`~spaceinvaders.entities.Player` on active vs alive).
+        """
         self.cfg = cfg or Config()
         self.rng = rng or random.Random()
         self.num_players = num_players
         self.state = GameState.RUNNING
         self._enemy_dir = 1  # +1 => moving right, -1 => moving left
         self.players = self._spawn_players(num_players)
+        if active_pids is not None:
+            active = set(active_pids)
+            for player in self.players:
+                player.active = player.pid in active
         self.enemies = self._spawn_formation()
         self.bullets = []
+
+    def activate_player(self, pid: int) -> None:
+        """Promote a slot to an active participant (called when a client joins).
+
+        The public seam the server uses instead of reaching into a player's
+        fields directly — keeps ``step``/``snapshot`` the only other surface.
+        """
+        self.players[pid].active = True
 
     # ------------------------------------------------------------------ setup
     def _spawn_players(self, num_players):
@@ -93,7 +113,7 @@ class GameWorld:
 
     def _step_players(self, dt, inputs):
         for player in self.players:
-            if not player.alive:
+            if not (player.active and player.alive):
                 continue
             held = inputs.get(player.pid, _EMPTY_HELD)
             move_x, move_y = self._move_vector(held)
@@ -173,7 +193,7 @@ class GameWorld:
 
     def _enemy_bullet_vs_players(self, bullet):
         for player in self.players:
-            if not player.alive:
+            if not (player.active and player.alive):
                 continue
             if aabb_overlap(bullet.x, bullet.y, bullet.w, bullet.h,
                             player.x, player.y, player.w, player.h):
@@ -201,7 +221,10 @@ class GameWorld:
         if all(not e.alive for e in self.enemies):
             self.state = GameState.WON
             return
-        if all(not p.alive for p in self.players):
+        # Only participants decide the loss; never-joined slots don't count,
+        # and an empty roster (nobody active yet) is a lobby, not a defeat.
+        active = [p for p in self.players if p.active]
+        if active and all(not p.alive for p in active):
             self.state = GameState.LOST
             return
         if any(e.alive and e.y <= self.cfg.invasion_y for e in self.enemies):
@@ -219,7 +242,7 @@ class GameWorld:
             "players": [
                 {"pid": p.pid, "x": p.x, "y": p.y, "alive": p.alive,
                  "lives": p.lives, "score": p.score}
-                for p in self.players
+                for p in self.players if p.active
             ],
             "enemies": [
                 {"x": e.x, "y": e.y} for e in self.enemies if e.alive

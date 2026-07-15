@@ -27,12 +27,10 @@ import time
 import websockets
 
 from . import protocol
-from .config import Config
+from .config import DT, Config
 from .input import encode_inputs
 from .world import GameWorld
 
-TICK_HZ = 30
-DT = 1.0 / TICK_HZ
 SEND_EVERY_N_TICKS = 2          # ~15 Hz snapshot broadcast
 RECONNECT_GRACE_SECONDS = 30.0  # a disconnected pid's slot stays reclaimable
 ROOM_IDLE_SECONDS = 60.0        # room is torn down once idle this long
@@ -51,10 +49,11 @@ class Room:
 
     Player slots are fixed at room creation (``GameWorld`` sizes ship spacing
     from ``num_players`` at construction), so ``max_players`` is the room's
-    capacity, not a live headcount. A slot that has never been claimed by a
-    connection starts out ``alive=False`` (a "ghost" is not a participant, so
-    it can't be hit and doesn't block the LOST condition) and only becomes a
-    real, live player the moment someone actually joins that pid.
+    capacity, not a live headcount. The world is created with an empty active
+    set; a slot only becomes an active participant via
+    ``world.activate_player(pid)`` when someone actually joins it, so a slot
+    nobody claimed is never simulated, rendered, or counted toward the loss
+    condition (see :class:`~spaceinvaders.entities.Player`).
 
     A disconnected player's slot is held open for
     :data:`RECONNECT_GRACE_SECONDS` and reclaimed by presenting the same
@@ -69,9 +68,7 @@ class Room:
         self.cfg = cfg or Config()
         self.seed = seed if seed is not None else secrets.randbits(32)
         self.world = GameWorld(self.cfg, rng=random.Random(self.seed),
-                               num_players=max_players)
-        for player in self.world.players:
-            player.alive = False  # not a participant until someone actually joins
+                               num_players=max_players, active_pids=frozenset())
         self.connections = {}       # pid -> websocket | None (disconnected)
         self.tokens = {}            # pid -> session token
         self.held = {}              # pid -> set(Intent), current input state
@@ -119,7 +116,7 @@ class Room:
         self.held[pid] = set()
         self.disconnect_time[pid] = None
         if first_join:
-            self.world.players[pid].alive = True
+            self.world.activate_player(pid)
         return pid, new_token
 
     def leave(self, pid: int) -> None:

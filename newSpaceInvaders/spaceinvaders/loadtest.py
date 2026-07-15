@@ -23,10 +23,10 @@ import time
 import websockets
 
 from . import protocol
-from .config import Config
+from .config import DT, Config
 from .server import start_server
 
-INPUT_INTERVAL_S = 0.033   # ~30/s, matches the client convention used elsewhere
+INPUT_INTERVAL_S = DT      # ~30/s, matches the sim tick rate (config.DT)
 PING_INTERVAL_S = 0.5
 
 # A handful of held-intent patterns cycled per simulated player so the swarm

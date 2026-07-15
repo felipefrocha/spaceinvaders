@@ -388,19 +388,24 @@ def test_new_player_can_claim_a_slot_abandoned_past_grace_with_no_token():
     assert new_token is not None
 
 
-def test_never_joined_slots_start_not_alive():
+def test_never_joined_slots_start_inactive():
     room = Room("x", max_players=3)
-    assert all(p.alive is False for p in room.world.players)
+    # Slots nobody has joined are inactive (not participants) -- and so are
+    # absent from the snapshot entirely rather than shown as phantom players.
+    assert all(p.active is False for p in room.world.players)
+    assert room.world.snapshot()["players"] == []
 
 
-def test_player_becomes_alive_on_first_join_only():
+def test_player_becomes_active_on_first_join_only():
     room = Room("x", max_players=2)
 
     async def scenario():
         await room.join(object(), None)
     run(scenario())
-    assert room.world.players[0].alive is True
-    assert room.world.players[1].alive is False
+    assert room.world.players[0].active is True
+    assert room.world.players[1].active is False
+    # Only the joined slot appears in the snapshot.
+    assert [p["pid"] for p in room.world.snapshot()["players"]] == [0]
 
 
 def test_lost_condition_does_not_wait_on_never_joined_ghost_slots():
@@ -410,8 +415,8 @@ def test_lost_condition_does_not_wait_on_never_joined_ghost_slots():
         return await room.join(object(), None)
     pid, _ = run(scenario())
 
-    # Only pid joined; the other two never did, so they start not-alive and
-    # must not block the LOST condition once the one real player dies.
+    # Only pid joined; the other two never became active, so they must not
+    # block the LOST condition once the one real participant dies.
     room.world.players[pid].hit()
     room.world.step(server.DT, {})
 
