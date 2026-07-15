@@ -4,66 +4,68 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A college final project ("Trabalho final de ATR" — Real-Time Automation) implementing a
-Space Invaders clone in Python `turtle` graphics. The academic point of the assignment is
-concurrency: modeling game entities as threads and coordinating them with synchronization
-primitives, plus a network (UDP) logging server. It is a learning artifact, not production
-software — see "Architecture" below before assuming any file is live or correct.
+A college final project ("Trabalho final de ATR" — Real-Time Automation): a two-player
+Space Invaders clone in Python `turtle` graphics. It has been **rewritten** onto a decoupled
+architecture (the `spaceinvaders/` package) with a pure, headless, unit-tested game core; the
+original thread-per-entity + `turtle` implementation is kept alongside it as **legacy**.
 
 All source lives in the `newSpaceInvaders/` subdirectory. There is no root-level project file.
 
 ## Commands
 
-There is no build system, test runner, or linter configured. Everything runs directly.
+The live game is the `spaceinvaders/` package. Tests use `pytest` + coverage.
 
 ```bash
 cd newSpaceInvaders
-python3 game.py          # run the game (opens a turtle/Tk window; needs a display)
-python3 testes.py        # run the standalone enemy-movement prototype (unrelated to game.py)
+python3 -m spaceinvaders                         # run the 2-player game (needs display + tkinter)
+python3 -m pip install -r requirements-dev.txt   # test tooling
+python3 -m pytest                                # run the unit tests
+python3 -m pytest --cov --cov-report=term-missing  # tests + coverage (core is at 100%)
+python3 -m pytest tests/test_world.py::test_win_when_all_enemies_dead  # a single test
 ```
 
-- Target runtime is **Python 3.6** (now EOL); a committed `venv/` under `newSpaceInvaders/`
-  pins it. `requirements.txt` lists `actions`, `bunch`, `PyYAML`, but only `PyYAML` is actually
-  used (by the log server). `turtle`, `threading`, `multiprocessing`, `socketserver` are stdlib.
-- The game needs a graphical display — it will not run headless without a virtual framebuffer
-  (e.g. `xvfb-run python3 game.py`), and even then it is interactive (arrow keys + space).
-- There are **no automated tests**. `testes.py` is a throwaway prototype despite its name.
+- The **core** package (everything except `turtle_app.py`) is **stdlib-only** and runs
+  headless — no display needed for tests. Target runtime is Python 3.7+ (uses dataclasses).
+- Running the actual game needs a graphical display and `tkinter` (`python3-tk`). Coverage
+  omits `turtle_app.py`/`__main__.py` (they require a live display) — see `.coveragerc`.
+- Controls: **Player 1 = WASD + Space** to fire; **Player 2 = arrow keys + Enter** to fire.
+  Key→action mapping lives in `spaceinvaders/input.py` (`KEYMAP_P1`/`KEYMAP_P2`).
 
-## Architecture — the one thing to understand first
+## Architecture — the live game (`spaceinvaders/` package)
 
-**There are two incompatible engine designs in the tree, and only one is wired up.**
+Strictly layered; each module depends only on those below it, and the game logic knows
+nothing about the keyboard or the screen:
 
-1. **The live engine is `game.py`'s `__main__` block.** It creates raw `turtle.Turtle`
-   objects directly and spawns one `move_enemy_horizontally` worker thread per enemy. Player
-   input, the score, and the log server are all started here. This is what actually runs.
+- `config.py` — one frozen `Config` dataclass; speeds are **units/second** (multiply by `dt`).
+- `geometry.py` — `clamp` + `aabb_overlap` (centre-anchored boxes). No dependencies.
+- `input.py` — `Intent` enum, `KEYMAP_P1`/`KEYMAP_P2`, and `InputState` (held-key `set`). The
+  seam that decouples the sim from any keyboard backend.
+- `entities.py` — `Player`/`Enemy`/`Bullet`: data + local update rules, no I/O.
+- `world.py` — `GameWorld`: the **deterministic** simulation. `step(dt, inputs)` advances one
+  frame; `inputs` is `{pid: set(Intent)}`. RNG is **injected** for testability. Rendering reads
+  `snapshot()` (a plain dict), never the internal objects.
+- `engine.py` — `GameLoop.tick(dt)` (owns world + per-player `InputState` + renderer) and
+  `run_headless(...)` for driving the sim with no screen (tests/benchmarks).
+- `renderer.py` — `Renderer` interface + `NullRenderer`. Headless-safe.
+- `turtle_app.py` — the **only** module that imports `turtle`. Owns the `Screen`, binds both
+  key maps via `onkeypress`/`onkeyrelease`, and re-arms a single `ontimer` frame callback on the
+  main thread. `TurtleRenderer` uses a stamp pool. Excluded from coverage.
 
-2. **The dead engine is `Enemy.py` + `Disparo.py` + the `INVADERS_POS`/`PLAYER_POS` globals.**
-   These implement a "thread-per-entity sharing global position lists guarded by semaphores"
-   model. `game.py` imports `Enemy`/`Disparo` but **never instantiates `Enemy`**
-   (`create_enemy()` is defined and never called). Treat these files, `testes.py`, and the
-   large commented-out `game()` function at the top of `game.py` as **dead code** unless a task
-   explicitly revives them. Do not assume changing `Enemy.py` affects the running game.
+Design intent to preserve when editing: **single-threaded fixed-timestep loop** (no thread/
+semaphore per entity like the legacy engine — that is the performance answer), determinism via
+injected RNG + explicit `dt`, and rendering driven only by `snapshot()`.
 
-### How the live engine coordinates threads (the ATR core)
+## Legacy engine (kept as historical artifact — not the live game)
 
-- `turtle`/Tk is **not thread-safe**, so the intended discipline is that worker threads push
-  turtle mutations as a callable (or `(callable, arg)` / `(callable, (a, b))` tuple) onto a
-  shared `actions = Queue(...)` for the main thread to apply. Note the discipline is **not
-  fully followed**: `move_enemy_horizontally` also calls some turtle methods directly from the
-  worker thread (e.g. `player.draw.hideturtle()` at game.py:229/253, and reads `enemy.position()`
-  / `enemy.ycor()`). Don't assume all drawing is already funneled — this is a latent bug source.
-- `process_queue()` runs on the **main thread**, drains the queue, and re-arms itself via
-  `screen.ontimer(process_queue, 100)` while threads are alive. This funnel is the mechanism
-  that keeps Tk calls on the main thread — respect it when adding entity behavior.
-- Shared state is module-level globals (`game_over`, `number_of_enemies`, `player_bullet`,
-  and the `*_POS` lists in `constants.py`). Note `game_over` is effectively **dead**: it is
-  initialized `True` and only ever assigned `True` (never `False`), and `screen.mainloop()`
-  never reads it — so setting `game_over = False` will not end the game. `constants.py` also
-  holds screen bounds and the `sem`/`lock` semaphores.
-- Collision detection is polling-based distance checks (`is_colision*` functions compare
-  entity coordinates against the player / player bullet within a pixel threshold).
+`game.py`, `Enemy.py`, `Player.py`, `Disparo.py`, `Score.py`, `constants.py`, `logServer.py`,
+and `testes.py` are the **original** thread-per-entity + `turtle` implementation. Do not extend
+them; new work goes in the `spaceinvaders/` package. Notable traits if you must read them:
+`game.py`'s `__main__` spawns one `move_enemy_horizontally` worker thread per enemy and funnels
+turtle calls through an `actions = Queue`/`process_queue` pump (but not consistently — some
+turtle calls happen directly on worker threads); `Enemy`/`Disparo` are a second, unused engine;
+`game_over` is dead (only ever set `True`, never read to end the loop).
 
-### Distributed logging path
+### Distributed logging path (legacy)
 
 - `game.py:init_logger()` spawns `logServer.py:main()` as a **separate process**
   (`multiprocessing.Process`), waits with a hard-coded `time.sleep(5)`, then attaches a
