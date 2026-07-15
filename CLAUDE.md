@@ -18,10 +18,15 @@ The live game is the `spaceinvaders/` package. Tests use `pytest` + coverage.
 ```bash
 cd newSpaceInvaders
 python3 -m spaceinvaders                         # run the 2-player game (needs display + tkinter)
-python3 -m pip install -r requirements-dev.txt   # test tooling
+python3 -m pip install -r requirements-dev.txt   # test tooling (includes websockets)
 python3 -m pytest                                # run the unit tests
 python3 -m pytest --cov --cov-report=term-missing  # tests + coverage (core is at 100%)
 python3 -m pytest tests/test_world.py::test_win_when_all_enemies_dead  # a single test
+
+python3 -m pip install -r requirements-server.txt          # server-only runtime dep
+python3 -m spaceinvaders.server --port 8765 --max-players 5  # run the online server
+
+cd electron-client && npm install && npm start             # run the Electron desktop client
 ```
 
 - The **core** package (everything except `turtle_app.py`) is **stdlib-only** and runs
@@ -54,6 +59,45 @@ nothing about the keyboard or the screen:
 Design intent to preserve when editing: **single-threaded fixed-timestep loop** (no thread/
 semaphore per entity like the legacy engine — that is the performance answer), determinism via
 injected RNG + explicit `dt`, and rendering driven only by `snapshot()`.
+
+## Online multiplayer (`spaceinvaders/server.py` + `spaceinvaders/protocol.py`)
+
+An **authoritative server** for up to 5 synced players, built on the exact same core — it calls
+`world.step(dt, inputs)` unchanged; only the source of `inputs` and the destination of
+`snapshot()` differ from the offline/turtle path.
+
+- `protocol.py` — the wire format: plain, **allow-listed JSON** (`decode_message` rejects
+  anything outside the documented shapes, never raises anything but `ProtocolError` on bad
+  input). This is the deliberate, security-motivated replacement for the legacy
+  `logServer.py`'s `pickle.loads()`-on-the-network pattern — **never reintroduce pickle for
+  anything touching a socket.** Read the module docstring for the exact message shapes.
+- `server.py` — `Room` (one `GameWorld` + per-pid connections/tokens/held-input + a 30 Hz tick
+  loop broadcasting snapshots every other tick, ~15 Hz) and `RoomRegistry` (room-code → `Room`,
+  created lazily on join). `start_server(host, port, max_players, cfg)` returns a running
+  `websockets` server — pass `port=0` for an ephemeral port (used by both tests and local/offline
+  play). Reconnect: a disconnected pid's slot is held for `RECONNECT_GRACE_SECONDS` and reclaimed
+  by presenting the same session token issued in `welcome`.
+- **Offline play reuses this same server**, spawned as a local child process on an ephemeral
+  port (it prints `PORT=<n>` to stdout as its first line) — there is deliberately only one game
+  engine and one network protocol, whether the other end is a local process or a remote peer.
+- `replay.py` — deterministic record/replay (`RoundRecord`, `record_headless`, `replay`,
+  `state_hash`) built directly from `Room.input_log`'s shape (`[(tick, {pid: [intent_name,...]})]`).
+  This is the desync-detection and reproducibility primitive: replaying the same `(seed, cfg,
+  input_log)` must yield a bit-identical `state_hash` every time. JSON only, no pickle, same rule
+  as above.
+- Requires the `websockets` package (`requirements-server.txt`); the offline core
+  (`config`/`geometry`/`input`/`entities`/`world`/`engine`/`renderer`) stays stdlib-only.
+
+## Electron desktop client (`electron-client/`)
+
+A separate Node/Electron project (`electron-client/package.json`) that speaks `protocol.py`'s
+JSON wire format over WebSocket — never Python FFI. `main.js` spawns a local `spaceinvaders.server`
+child process for offline/local-co-op play and connects directly to a remote host:port for online
+play; the renderer draws `snapshot()` on a `<canvas>`, sends `held`-intent-set `input` frames, and
+mirrors the same **WASD (P1) / arrows (P2)** control scheme as `spaceinvaders/input.py`. See
+`electron-client/README.md` for how to run it. The `turtle_app.py` client is unaffected and remains
+the offline/2p-local reference implementation — the two frontends are independent consumers of the
+same core and protocol, not a replacement of one by the other.
 
 ## Legacy engine (kept as historical artifact — not the live game)
 

@@ -1,0 +1,4 @@
+# Runtime dependency for the online multiplayer server (spaceinvaders/server.py).
+# The offline game core (spaceinvaders/{config,geometry,input,entities,world,engine,renderer}.py)
+# remains stdlib-only; only the networked server needs this.
+websockets>=12.0
