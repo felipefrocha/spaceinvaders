@@ -8,7 +8,7 @@ A college final project ("Trabalho final de ATR" — Real-Time Automation) imple
 Space Invaders clone in Python `turtle` graphics. The academic point of the assignment is
 concurrency: modeling game entities as threads and coordinating them with synchronization
 primitives, plus a network (UDP) logging server. It is a learning artifact, not production
-software — see "Known structural issues" before assuming any file is live or correct.
+software — see "Architecture" below before assuming any file is live or correct.
 
 All source lives in the `newSpaceInvaders/` subdirectory. There is no root-level project file.
 
@@ -46,15 +46,20 @@ python3 testes.py        # run the standalone enemy-movement prototype (unrelate
 
 ### How the live engine coordinates threads (the ATR core)
 
-- `turtle`/Tk is **not thread-safe**, so worker threads never draw directly. Instead every
-  turtle mutation is pushed as a callable (or `(callable, arg)` / `(callable, (a, b))` tuple)
-  onto a shared `actions = Queue(...)`.
+- `turtle`/Tk is **not thread-safe**, so the intended discipline is that worker threads push
+  turtle mutations as a callable (or `(callable, arg)` / `(callable, (a, b))` tuple) onto a
+  shared `actions = Queue(...)` for the main thread to apply. Note the discipline is **not
+  fully followed**: `move_enemy_horizontally` also calls some turtle methods directly from the
+  worker thread (e.g. `player.draw.hideturtle()` at game.py:229/253, and reads `enemy.position()`
+  / `enemy.ycor()`). Don't assume all drawing is already funneled — this is a latent bug source.
 - `process_queue()` runs on the **main thread**, drains the queue, and re-arms itself via
   `screen.ontimer(process_queue, 100)` while threads are alive. This funnel is the mechanism
   that keeps Tk calls on the main thread — respect it when adding entity behavior.
 - Shared state is module-level globals (`game_over`, `number_of_enemies`, `player_bullet`,
-  and the `*_POS` lists in `constants.py`). Note `game_over = True` means "game **running**"
-  (inverted naming). `constants.py` also holds screen bounds and the `sem`/`lock` semaphores.
+  and the `*_POS` lists in `constants.py`). Note `game_over` is effectively **dead**: it is
+  initialized `True` and only ever assigned `True` (never `False`), and `screen.mainloop()`
+  never reads it — so setting `game_over = False` will not end the game. `constants.py` also
+  holds screen bounds and the `sem`/`lock` semaphores.
 - Collision detection is polling-based distance checks (`is_colision*` functions compare
   entity coordinates against the player / player bullet within a pixel threshold).
 
