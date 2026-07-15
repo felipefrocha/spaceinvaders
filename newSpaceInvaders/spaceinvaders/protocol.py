@@ -54,7 +54,13 @@ def decode_message(raw: str) -> dict:
     oversized payload, unknown intent names).
     """
     _require(isinstance(raw, str), "frame must be text")
-    _require(len(raw.encode("utf-8")) <= MAX_FRAME_BYTES, "frame too large")
+    try:
+        frame_size = len(raw.encode("utf-8"))
+    except UnicodeError as exc:
+        # A lone surrogate (e.g. chr(0xd800)) is a valid Python str but has no
+        # UTF-8 encoding; treat it as malformed input rather than crashing.
+        raise ProtocolError(f"frame is not valid UTF-8: {exc}") from exc
+    _require(frame_size <= MAX_FRAME_BYTES, "frame too large")
 
     try:
         obj = json.loads(raw)

@@ -268,16 +268,10 @@ def test_decode_message_never_raises_anything_other_than_protocol_error(raw):
         pytest.fail(f"decode_message raised {type(exc).__name__} instead of ProtocolError: {exc}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG (protocol.py:57): decode_message('\\ud800') (a lone UTF-16 surrogate, "
-    "which Python happily represents as a str via surrogateescape/direct "
-    "construction) raises UnicodeEncodeError from raw.encode('utf-8') inside "
-    "the frame-size check, not ProtocolError. This violates the documented "
-    "'never raises anything other than ProtocolError' contract; a caller that "
-    "does `except protocol.ProtocolError` around decode_message (as "
-    "server.py's _handle_connection does) would let this propagate uncaught."
-))
 def test_decode_message_lone_surrogate_raises_protocol_error_not_unicode_error():
+    # Regression test: a lone UTF-16 surrogate (e.g. chr(0xd800)) is a valid
+    # Python str but has no UTF-8 encoding; decode_message must reject it as
+    # ProtocolError, not let UnicodeError escape from the frame-size check.
     with pytest.raises(ProtocolError):
         decode_message("\ud800")
 
