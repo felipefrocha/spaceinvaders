@@ -85,6 +85,14 @@ An **authoritative server** for up to 5 synced players, built on the exact same 
   This is the desync-detection and reproducibility primitive: replaying the same `(seed, cfg,
   input_log)` must yield a bit-identical `state_hash` every time. JSON only, no pickle, same rule
   as above.
+- `loadtest.py` — a performance **simulation**, not a correctness test: it starts a real
+  `start_server(...)` and drives it with real `websockets` client connections on loopback at
+  realistic input/ping cadence, then reports round-trip latency, snapshot cadence, and bandwidth
+  measured client-side (a server whose tick loop is falling behind shows up as growing RTT and
+  irregular snapshot gaps, with no server instrumentation needed). Run it directly —
+  `python3 -m spaceinvaders.loadtest --rooms 5 --players-per-room 5 --duration 10` — for ad hoc
+  load numbers; `tests/test_loadtest.py` keeps a fast, small-scale version of it in the regular
+  suite so a real regression (not just a unit-level one) gets caught.
 - Requires the `websockets` package (`requirements-server.txt`); the offline core
   (`config`/`geometry`/`input`/`entities`/`world`/`engine`/`renderer`) stays stdlib-only.
 
